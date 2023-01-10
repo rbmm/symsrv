@@ -1,7 +1,18 @@
 #include "stdafx.h"
-#include "resource.h"
+#include "internal.h"
 
 EXTERN_C_START
+
+NTSYSAPI
+PVOID
+NTAPI
+RtlImageDirectoryEntryToData(
+							 _In_ PVOID Base,
+							 _In_ BOOLEAN MappedAsImage,
+							 _In_ USHORT DirectoryEntry,
+							 _Out_ PULONG Size
+							 );
+
 
 WINBASEAPI
 BOOL CALLBACK SymbolServerSetOptionsW(
@@ -23,8 +34,10 @@ PVOID __imp_SymbolServerSetOptionsW, __imp_SymbolServerW;
 
 EXTERN_C_END
 
-_NT_BEGIN
-#include "symsrv.h"
+inline ULONG BOOL_TO_ERROR(BOOL f)
+{
+	return f ? NOERROR : GetLastError();
+}
 
 void OnEvent(PIMAGEHLP_CBA_EVENTW p, DownloadContext* context)
 {
@@ -52,6 +65,22 @@ void OnEvent(PIMAGEHLP_CBA_EVENTW p, DownloadContext* context)
 	}
 }
 
+void OnXml(PWSTR psz, DownloadContext* context)
+{
+	static const WCHAR Progress_begin[] = L"<Progress percent=\"";
+	static const WCHAR Progress_end[] = L"\"/>";
+
+	if (!memcmp(psz, Progress_begin, sizeof(Progress_begin) - sizeof(WCHAR)))
+	{
+		ULONG n = wcstoul(psz + _countof(Progress_begin) - 1, &psz, 10);
+
+		if (!memcmp(psz, Progress_end, sizeof(Progress_end) - sizeof(WCHAR)))
+		{
+			PostMessageW(context->_hwnd, e_progress, (WPARAM)n, (LPARAM)context);
+		}
+	}
+}
+
 BOOL CALLBACK symsrvCallback(UINT_PTR action, ULONG64 data, ULONG64 context)
 {
 	switch (action)
@@ -74,8 +103,9 @@ BOOL CALLBACK symsrvCallback(UINT_PTR action, ULONG64 data, ULONG64 context)
 
 	case SSRVACTION_TRACE:
 	case SSRVACTION_XMLOUTPUT:
-		reinterpret_cast<DownloadContext*>(context)->_xml << (PCWSTR)data << L"\r\n";
+		OnXml((PWSTR)data, reinterpret_cast<DownloadContext*>(context));
 		break;
+
 	default: 
 		reinterpret_cast<DownloadContext*>(context)->_log(L"!! action[%x] data=%I64x\r\n", action, data);
 	}
@@ -176,7 +206,6 @@ ULONG CALLBACK WorkThread(_In_ DownloadContext* context)
 	if (NOERROR == dwError)
 	{
 		context->_log.Init(0x10000);
-		context->_xml.Init(0x10000);
 		if (PWSTR buf = new WCHAR [MAX_PATH])
 		{
 			context->_PdbFilePath = buf;
@@ -220,4 +249,88 @@ ULONG InitSymSrv()
 	return GetLastError();
 }
 
-_NT_END
+HRESULT Create(_Out_ IDownloadContext** ppCtx, _In_ PCWSTR lpFileName, _In_ PWSTR params, _In_ HWND hwnd)
+{
+	HRESULT dwError = E_OUTOFMEMORY;
+
+	if (params = _wcsdup(params))
+	{
+		if (DownloadContext* pCtx = new DownloadContext(params, hwnd))
+		{
+			if (NOERROR == (dwError = GetPdbforPE(lpFileName, pCtx)))
+			{
+				*ppCtx = pCtx;
+				return S_OK;
+			}
+
+			pCtx->Release();
+		}
+
+		free(params);
+
+		dwError = HRESULT_FROM_WIN32(dwError);
+	}
+
+	return dwError;
+}
+
+HRESULT DownloadContext::Start()
+{
+	AddRef();
+
+	if (HANDLE hThread = CreateThread(0, 0, (PTHREAD_START_ROUTINE)WorkThread, this, 0, 0))
+	{
+		CloseHandle(hThread);
+		return S_OK;
+	}
+	
+	Release();
+
+	return HRESULT_FROM_WIN32(GetLastError());
+}
+
+void OpenFolderAndSelectFile(_In_ PCWSTR lpFileName )
+{
+	if (PIDLIST_ABSOLUTE pidl = ILCreateFromPath(lpFileName))
+	{
+		SHOpenFolderAndSelectItems(pidl, 0, 0, 0);
+		ILFree(pidl);
+	}
+}
+
+void DownloadContext::ShowLog(_In_opt_ HWND hwnd)
+{
+	if (_log.IsEmpty())
+	{
+		return ;
+	}
+
+	if (hwnd = CreateWindowExW(0, WC_EDIT, _PdbFileName, 
+		WS_OVERLAPPEDWINDOW|WS_HSCROLL|WS_VSCROLL|ES_MULTILINE,
+		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, hwnd, 0, 0, 0))
+	{
+		HFONT hFont = 0;
+		NONCLIENTMETRICS ncm = { sizeof(NONCLIENTMETRICS) };
+		if (SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
+		{
+			wcscpy(ncm.lfMessageFont.lfFaceName, L"Courier New");
+			ncm.lfMessageFont.lfHeight = -ncm.iMenuHeight;
+			ncm.lfMessageFont.lfWeight = FW_NORMAL;
+			ncm.lfMessageFont.lfQuality = CLEARTYPE_QUALITY;
+			ncm.lfMessageFont.lfPitchAndFamily = FIXED_PITCH|FF_MODERN;
+			ncm.lfMessageFont.lfHeight = -ncm.iMenuHeight;
+
+			hFont = CreateFontIndirect(&ncm.lfMessageFont);
+		}
+
+		if (hFont) SendMessage(hwnd, WM_SETFONT, (WPARAM)hFont, 0);
+
+		ULONG n = 8;
+		SendMessage(hwnd, EM_SETTABSTOPS, 1, (LPARAM)&n);
+
+		_log >> hwnd;
+
+		ShowWindow(hwnd, SW_SHOWNORMAL);
+	}
+}
+

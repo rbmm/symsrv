@@ -1,62 +1,29 @@
 #pragma once
 
-enum { e_completed = WM_APP, e_status};
+// return error codes defined in Winerror.h
+ULONG InitSymSrv(); 
 
-#include "log.h"
-
-struct DownloadContext
-{
-	WLog _log, _xml;
-	PWSTR _PdbFileName = 0, _PdbFilePath = 0;
-	PWSTR _params;
-	GUID Signature;
-	HWND _hwnd;
-	ULONG Age;
-	BOOL _bCancel = FALSE;
-	LONG _dwRefCount = 1;
-
-	void AddRef()
-	{
-		InterlockedIncrementNoFence(&_dwRefCount);
-	}
-
-	void Release()
-	{
-		if (!InterlockedDecrement(&_dwRefCount))
-		{
-			delete this;
-		}
-	}
-
-	DownloadContext(_In_ PWSTR params, _In_ HWND hwnd) : _params(params), _hwnd(hwnd)
-	{
-	}
-
-	~DownloadContext()
-	{
-		PWSTR psz;
-
-		if (psz = _PdbFilePath)
-		{
-			delete [] psz;
-		}
-
-		if (psz = _PdbFileName)
-		{
-			delete [] psz;
-		}
-
-		if (psz = _params)
-		{
-			delete [] psz;
-		}
-	}
+enum { 
+	e_completed = WM_APP,	// wParam = final HRESULT, lParam = IDownloadContext
+	e_status,				// wParam = wcsdup(psz), lParam = IDownloadContext
+	e_progress				// wParam = percent, lParam = IDownloadContext
 };
 
-ULONG GetPdbforPE(_In_ PCWSTR lpszName, _Out_ DownloadContext* context);
+struct __declspec(novtable) IDownloadContext
+{
+	virtual void AddRef() = 0;
+	virtual void Release() = 0;
+	virtual HRESULT Start() = 0;
+	virtual void Cancel() = 0;
+	virtual PCWSTR GetPdbFileName() = 0;
+	virtual PCWSTR GetPdbFilePath() = 0;
 
-ULONG InitSymSrv();
+	virtual void ShowLog(_In_opt_ HWND hWndParent) = 0;
+};
 
-ULONG CALLBACK WorkThread(_In_ DownloadContext* context);
+// params = folder*server;
+// i.e. c:\windows\symbols*https://msdl.microsoft.com/download/symbols
+HRESULT Create(_Out_ IDownloadContext** ppCtx, _In_ PCWSTR lpFileName, _In_ PWSTR params, _In_ HWND hwnd);
 
-BOOL IsValidPDBExist(_In_ PCWSTR pszFile, _In_ const GUID* Signature, _In_ DWORD Age);
+void OpenFolderAndSelectFile(_In_ PCWSTR lpFileName );
+

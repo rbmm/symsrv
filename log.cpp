@@ -1,7 +1,4 @@
 #include "stdafx.h"
-
-_NT_BEGIN
-
 #include "log.h"
 
 void WLog::operator >> (HWND hwnd)
@@ -17,7 +14,7 @@ void WLog::operator >> (HWND hwnd)
 
 ULONG WLog::Init(SIZE_T RegionSize)
 {
-	if (PVOID BaseAddress = LocalAlloc(0, RegionSize))
+	if (PVOID BaseAddress = LocalAlloc(LMEM_FIXED, RegionSize))
 	{
 		_RegionSize = (ULONG)RegionSize, _Ptr = 0, _BaseAddress = BaseAddress;
 		*(WCHAR*)BaseAddress = 0;
@@ -86,5 +83,3 @@ __nt:
 	}
 	return *this;
 }
-
-_NT_END

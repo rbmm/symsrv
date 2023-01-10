@@ -1,9 +1,8 @@
 #include "stdafx.h"
 #include "resource.h"
+#include "symsrv.h"
 
 _NT_BEGIN
-
-#include "symsrv.h"
 
 int ShowErrorBox(HWND hwnd, HRESULT dwError, PCWSTR pzCaption, UINT uType)
 {
@@ -44,41 +43,6 @@ int ShowErrorBox(HWND hwnd, HRESULT dwError, PCWSTR pzCaption, UINT uType)
 	}
 
 	return r;
-}
-
-void ShowLog(HWND hwnd, PCWSTR Caption, WLog& log)
-{
-	if (log.IsEmpty())
-	{
-		return ;
-	}
-	if (hwnd = CreateWindowExW(0, WC_EDIT, Caption, 
-		WS_OVERLAPPEDWINDOW|WS_HSCROLL|WS_VSCROLL|ES_MULTILINE,
-		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, hwnd, 0, 0, 0))
-	{
-		HFONT hFont = 0;
-		NONCLIENTMETRICS ncm = { sizeof(NONCLIENTMETRICS) };
-		if (SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
-		{
-			wcscpy(ncm.lfMessageFont.lfFaceName, L"Courier New");
-			ncm.lfMessageFont.lfHeight = -ncm.iMenuHeight;
-			ncm.lfMessageFont.lfWeight = FW_NORMAL;
-			ncm.lfMessageFont.lfQuality = CLEARTYPE_QUALITY;
-			ncm.lfMessageFont.lfPitchAndFamily = FIXED_PITCH|FF_MODERN;
-			ncm.lfMessageFont.lfHeight = -ncm.iMenuHeight;
-
-			hFont = CreateFontIndirect(&ncm.lfMessageFont);
-		}
-
-		if (hFont) SendMessage(hwnd, WM_SETFONT, (WPARAM)hFont, 0);
-
-		ULONG n = 8;
-		SendMessage(hwnd, EM_SETTABSTOPS, 1, (LPARAM)&n);
-
-		log >> hwnd;
-
-		ShowWindow(hwnd, SW_SHOWNORMAL);
-	}
 }
 
 void OnBrowse(_In_ HWND hwndDlg, 
@@ -144,7 +108,7 @@ void FireWindow(HWND hwnd)
 
 class CDialog 
 {
-	DownloadContext* _context = 0;
+	IDownloadContext* _context = 0;
 	ULONG _editId = IDC_EDIT1;
 
 	void OnInitDialog(HWND hwnd)
@@ -198,7 +162,7 @@ class CDialog
 			{ L"All files", L"*" },
 		};
 
-		DownloadContext* context;
+		IDownloadContext* context;
 
 		switch(uMsg)
 		{
@@ -223,19 +187,14 @@ class CDialog
 			{
 				if ((LPARAM)context == lParam)
 				{
-					ShowLog(hwnd, L"LOG", context->_log);
-					ShowLog(hwnd, L"XML", context->_xml);
-					ToggleUI(hwnd, TRUE);
+					context->ShowLog(hwnd);
 					SetDlgItemTextW(hwnd, IDC_STATIC1, 0);
+					ToggleUI(hwnd, TRUE);
 					if (!(ULONG)wParam)
 					{
-						if (PIDLIST_ABSOLUTE pidl = ILCreateFromPath(context->_PdbFilePath))
-						{
-							SHOpenFolderAndSelectItems(pidl, 0, 0, 0);
-							ILFree(pidl);
-						}
+						OpenFolderAndSelectFile(context->GetPdbFilePath());
 					}
-					ShowErrorBox(hwnd, (ULONG)wParam, context->_PdbFileName, (ULONG)wParam ? MB_ICONHAND : MB_ICONINFORMATION);
+					ShowErrorBox(hwnd, (ULONG)wParam, context->GetPdbFileName(), (ULONG)wParam ? MB_ICONHAND : MB_ICONINFORMATION);
 					context->Release();
 					_context = 0;
 				}
@@ -249,6 +208,16 @@ class CDialog
 				{
 					SetDlgItemTextW(hwnd, IDC_STATIC1, (PWSTR)wParam);
 					free((PVOID)wParam);
+				}
+			}
+			break;
+
+		case e_progress:
+			if (context = _context) 
+			{
+				if ((LPARAM)context == lParam)
+				{
+					SendDlgItemMessageW(hwnd, IDC_PROGRESS1, PBM_SETPOS, wParam, 0);
 				}
 			}
 			break;
@@ -274,7 +243,7 @@ class CDialog
 			case MAKEWPARAM(IDCANCEL, BN_CLICKED):
 				if (context = _context) 
 				{
-					context->_bCancel = TRUE;
+					context->Cancel();
 				}
 				break;
 
@@ -354,7 +323,7 @@ class CDialog
 			{
 				ShowErrorBox(hwnd, HRESULT_FROM_NT(status), 0, MB_ICONHAND);
 				FireWindow(GetDlgItem(hwnd, IDC_EDIT2));
-				goto __fail;
+				goto __end;
 			}
 
 			params[len2] = '*';
@@ -370,51 +339,42 @@ class CDialog
 
 			if (0 >= len)
 			{
-				goto __fail;
+				goto __end;
 			}
 
 			if (!(len = GetWindowTextLengthW(GetDlgItem(hwnd, IDC_EDIT1))))
 			{
 				FireWindow(GetDlgItem(hwnd, IDC_EDIT1));
-				goto __fail;
+				goto __end;
 			}
 
 			++len;
 			GetDlgItemTextW(hwnd, IDC_EDIT1, pszFile = (PWSTR)alloca(len * sizeof(WCHAR)), len);
 
-			if (DownloadContext* context = new DownloadContext(params, hwnd))
+			SetDlgItemTextW(hwnd, IDC_STATIC1, 0);
+			SendDlgItemMessageW(hwnd, IDC_PROGRESS1, PBM_SETPOS, 0, 0);
+
+			IDownloadContext* context;
+
+			if (0 <= (status = Create(&context, pszFile, params, hwnd)))
 			{
-				params = 0;
-				if (ULONG dwError = GetPdbforPE(pszFile, context))
+				if (0 <= (status = context->Start()))
 				{
-					ShowErrorBox(hwnd, dwError, L"Invalid PE", MB_ICONHAND);
-					FireWindow(GetDlgItem(hwnd, IDC_EDIT1));
-				}
-				else
-				{
-					context->AddRef();
+					_context = context;
 
-					if (HANDLE hThread = CreateThread(0, 0, (PTHREAD_START_ROUTINE)WorkThread, context, 0, 0))
-					{
-						NtClose(hThread);
-						_context = context;
+					ToggleUI(hwnd, FALSE);
 
-						ToggleUI(hwnd, FALSE);
-						return ;
-					}
-					else
-					{
-						context->Release();
-					}
+					goto __end;
 				}
+
 				context->Release();
 			}
 
-			if (params)
-			{
-__fail:
-				delete [] params;
-			}
+			ShowErrorBox(hwnd, status, L"Invalid PE", MB_ICONHAND);
+			FireWindow(GetDlgItem(hwnd, IDC_EDIT1));
+
+__end:
+			delete [] params;
 		}
 	}
 
