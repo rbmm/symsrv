@@ -7,7 +7,7 @@ struct DownloadContext : public IDownloadContext
 {
 	WLog _log;
 	PWSTR _PdbFileName = 0, _PdbFilePath = 0;
-	PWSTR _params;
+	PWSTR _params = 0;
 	GUID Signature;
 	HWND _hwnd;
 	ULONG Age;

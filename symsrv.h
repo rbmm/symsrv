@@ -1,7 +1,7 @@
 #pragma once
 
 // return error codes defined in Winerror.h
-ULONG InitSymSrv(); 
+ULONG InitSymSrv(_In_ PCWSTR lpLibFileName = L"symsrv.dll"); 
 
 enum { 
 	e_completed = WM_APP,	// wParam = final HRESULT, lParam = IDownloadContext

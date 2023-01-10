@@ -224,9 +224,9 @@ ULONG CALLBACK WorkThread(_In_ DownloadContext* context)
 	return dwError;
 }
 
-ULONG InitSymSrv()
+ULONG InitSymSrv(_In_ PCWSTR lpLibFileName /*= L"symsrv.dll"*/)
 {
-	if (HMODULE hmod = LoadLibraryW(L"symsrv.dll"))
+	if (HMODULE hmod = LoadLibraryW(lpLibFileName))
 	{
 		if (
 			(__imp_SymbolServerW = GetProcAddress(hmod, "SymbolServerW")) &&
@@ -251,27 +251,24 @@ ULONG InitSymSrv()
 
 HRESULT Create(_Out_ IDownloadContext** ppCtx, _In_ PCWSTR lpFileName, _In_ PWSTR params, _In_ HWND hwnd)
 {
-	HRESULT dwError = E_OUTOFMEMORY;
-
 	if (params = _wcsdup(params))
 	{
 		if (DownloadContext* pCtx = new DownloadContext(params, hwnd))
 		{
-			if (NOERROR == (dwError = GetPdbforPE(lpFileName, pCtx)))
+			if (HRESULT dwError = GetPdbforPE(lpFileName, pCtx))
 			{
-				*ppCtx = pCtx;
-				return S_OK;
+				pCtx->Release();
+				return HRESULT_FROM_WIN32(dwError);
 			}
 
-			pCtx->Release();
+			*ppCtx = pCtx;
+			return S_OK;
 		}
 
 		free(params);
-
-		dwError = HRESULT_FROM_WIN32(dwError);
 	}
 
-	return dwError;
+	return E_OUTOFMEMORY;
 }
 
 HRESULT DownloadContext::Start()
